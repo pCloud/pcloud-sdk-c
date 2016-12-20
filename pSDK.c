@@ -97,7 +97,7 @@ static char * binresult_to_json(binresult* res)
 {
   
 }
-
+//test
 int psdk_send_api_command(const char *command, char **result, int login, int numparam, const char * fmt, ...) 
 {
   binparam *t;
