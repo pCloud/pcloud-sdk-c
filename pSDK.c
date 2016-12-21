@@ -23,6 +23,12 @@ typedef uint64_t pmobile_fileid_t;
 #define PSYNC_INVALID_FOLDERID ((pmobile_folderid_t)-1)
 #define PSYNC_INVALID_PATH NULL
 
+typedef struct {
+  uint64_t used;
+  uint64_t size;
+  char * begin;
+  char * buff;
+} jsonbuffer;
 
 pmobile_folderid_t get_folderid_by_path(const char * path,int create);
 pmobile_fileid_t get_fileid_by_path(const char * remotepath,const char * filename, uint64_t *hash);
@@ -93,11 +99,165 @@ static void api_set_server(const char *binapi) {
   }
 }
 
+static jsonbuffer* init_buffer(int initsize){
+  jsonbuffer* ret;
+  size_t typesize = sizeof(jsonbuffer);
+  if (initsize <= typesize) initsize =  typesize + 100;
+  ret =(jsonbuffer*) malloc (initsize);
+  ret->size = initsize - typesize;
+  ret->used = 0;
+  ret->buff = (char *) (ret + 1);
+  ret->begin = ret->buff;
+  return ret;
+}
+
+static int resize_buffer(jsonbuffer* buff) {
+  jsonbuffer* newbuff;
+  uint64_t new_size = buff->size*2;
+  newbuff = (jsonbuffer* ) realloc (buff, new_size + sizeof(jsonbuffer));
+  if (!newbuff) return 0;
+  newbuff->size = new_size;
+  newbuff->begin  =(char *)(newbuff + 1);
+  newbuff->used = buff->used;
+  newbuff->buff = newbuff->begin +  newbuff->used;
+  buff = newbuff;
+  return 1;
+}
+
+static int count_digits (uint64_t n) {
+    if (n < 0) n = (n == -0xFFFFFFFFFFFFFFFF) ? 0xFFFFFFFFFFFFFFFF : -n;
+    if (n > 9999999999999999999) return 20;
+    if (n > 999999999999999999) return 19;
+    if (n > 99999999999999999) return 18;
+    if (n > 9999999999999999) return 17;
+    if (n > 999999999999999) return 16;
+    if (n > 99999999999999) return 15;
+    if (n > 9999999999999) return 14;
+    if (n > 999999999999) return 13;
+    if (n > 99999999999) return 12;
+    if (n > 9999999999) return 11;
+    if (n > 999999999) return 10;
+    if (n > 99999999) return 9;
+    if (n > 9999999) return 8;
+    if (n > 999999) return 7;
+    if (n > 99999) return 6;
+    if (n > 9999) return 5;
+    if (n > 999) return 4;
+    if (n > 99) return 3;
+    if (n > 9) return 2;
+    return 1;
+}
+
+uint32_t print_hash_to_numchars(const binresult *res) {
+  uint32_t i,j;
+  uint32_t ret = 4;
+  if (unlikely(!res || res->type!=PARAM_HASH)) {
+    debug(D_WARNING, "expecting hash as first parameter, got %llu", res->type);
+    return 0;
+  }
+  
+  for (i=0; i<res->length; i++) {
+    if (res->hash[i].value->type == PARAM_NUM) 
+      ret += strlen(res->hash[i].key) + count_digits(res->hash[i].value->num) + 5;
+    
+    else if (res->hash[i].value->type == PARAM_BOOL) 
+      ret += strlen(res->hash[i].key) + ((res->hash[i].value->num)?4:5)  + 5;
+    
+    else if (res->hash[i].value->type == PARAM_STR) 
+      ret += strlen(res->hash[i].key) +  res->hash[i].value->length + 7;
+    
+    else if (res->hash[i].value->type == PARAM_HASH) 
+      ret += print_hash_to_numchars(res->hash[i].value) + 5 + strlen(res->hash[i].key);
+    
+    else if (res->hash[i].value->type == PARAM_ARRAY) {
+      ret += 8 + res->hash[i].value->length - 1  + strlen(res->hash[i].key);
+      for (j =0;j< res->hash[i].value->length;j++){
+        
+        if (res->hash[i].value->array[j]->type == PARAM_NUM)
+          ret += count_digits(res->hash[i].value->array[j]->num);
+        
+        else if (res->hash[i].value->array[j]->type == PARAM_BOOL)
+          ret += ((res->hash[i].value->array[j]->num)?4:5);
+        
+        else if (res->hash[i].value->array[j]->type == PARAM_STR)
+          ret += res->hash[i].value->array[j]->length;
+        
+        else if (res->hash[i].value->array[j]->type == PARAM_HASH)
+          ret += print_hash_to_numchars(res->hash[i].value->array[j]); 
+      }
+    }
+  }
+
+  return ret;
+}
+
+static void binresult_to_json(const binresult *res) {
+  uint32_t buffsize = print_hash_to_numchars(res);
+  if (!buffsize)
+    return;
+  char * buff = (char *) pmobile_malloc(mlib_, buffsize);
+  uint32_t chars_print = print_hash_to_json(res, buff);
+  if (chars_print != buffsize)
+    debug(D_BUG, "Bug buffer size and printed size don't match  printed %lu buffer %lu", chars_print, buffsize);
+}
+
+static uint32_t print_hash_to_json(const binresult *res, char* buff){
+  uint32_t i,j,ret,tmp;
+  ret += sprintf(buff,"{\n");
+  buff = buff +ret;
+  for (i=0; i<res->length; i++) {
+    if (res->hash[i].value->type == PARAM_NUM){
+      tmp = sprintf(buff, "\"%s\": %llu", res->hash[i].key, res->hash[i].value->num);
+      buff = buff + tmp;
+      ret += tmp;
+    }
+    else if (res->hash[i].value->type == PARAM_BOOL) {
+      tmp = sprintf(buff, "\"%s\": %s", res->hash[i].key, ((res->hash[i].value->num)?"true":"false"));
+      buff = buff + tmp;
+      ret += tmp;
+    }
+    else if (res->hash[i].value->type == PARAM_STR) {
+      tmp  = sprintf(buff, "\"%s\": \"%s\"", res->hash[i].key, res->hash[i].value->str);
+      buff = buff + tmp;
+      ret += tmp;
+    }
+    else if (res->hash[i].value->type == PARAM_HASH) {
+      tmp  = sprintf(buff, "\"%s\": ", res->hash[i].key);
+      buff = buff + tmp;
+      ret += tmp;
+      ret += print_hash_to_json(res->hash[i].value, buff);
+    }
+    else if (res->hash[i].value->type == PARAM_ARRAY) {
+      tmp  = sprintf(buff, "\"%s\": [\n", res->hash[i].key);
+      buff = buff + tmp;
+      ret += tmp;
+      ret += 7 + res->hash[i].value->length - 1  + strlen(res->hash[i].key);
+      for (j =0;j< res->hash[i].value->length;j++){
+        if (res->hash[i].value->array[j]->type == PARAM_NUM)
+          ret += count_digits(res->hash[i].value->array[j]->num);
+        else if (res->hash[i].value->array[j]->type == PARAM_BOOL)
+          ret += ((res->hash[i].value->array[j]->num)?4:5);
+        else if (res->hash[i].value->array[j]->type == PARAM_STR)
+          ret += res->hash[i].value->array[j]->length;
+        else if (res->hash[i].value->array[j]->type == PARAM_HASH)
+          ret += print_hash_to_numchars(res->hash[i].value->array[j]); 
+      }
+      tmp  = sprintf(buff, "\n]", res->hash[i].key);
+      buff = buff + tmp;
+      ret += tmp;
+    }
+    if ((i != res->length) && ret++)
+      buff = buff + sprintf(buff, ",");
+   }
+   return ret;
+}
+
+
 static char * binresult_to_json(binresult* res)
 {
   
 }
-//test
+
 int psdk_send_api_command(const char *command, char **result, int login, int numparam, const char * fmt, ...) 
 {
   binparam *t;
