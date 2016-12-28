@@ -732,7 +732,7 @@ static const char *clientid_;
 static const char *requestid_;
 static const char *clientsicret_;
 
-static void HAVE_STRUCT_TIMESPECwait_authorized() {
+static void wait_authorized() {
   logged_in_ = 0;
   pthread_mutex_lock(&auth_lock_);
   if (auth_)
