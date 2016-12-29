@@ -45,10 +45,10 @@ static uint64_t process_api_result(binresult* res) {
     logged_in_ = 0;
     if (auth_)
       pmobile_free(auth_);
+    auth_=NULL;
     pthread_mutex_unlock(&auth_lock_);
-    pmobile_free(res);
     return result;
-  }
+  } else return 0;
   return 1;
 }
 
@@ -59,6 +59,7 @@ static uint64_t process_api_int_result(uint64_t result) {
     logged_in_ = 0;
     if (auth_)
       pmobile_free(auth_);
+    auth_=NULL;
     pthread_mutex_unlock(&auth_lock_);
   }
   return result;
@@ -128,7 +129,7 @@ static int resize_buffer(jsonbuffer* buff) {
 }*/
 
 static int count_digits (uint64_t n) {
-    if (n < 0) n = (n == -0xFFFFFFFFFFFFFFFF) ? 0xFFFFFFFFFFFFFFFF : -n;
+   // if (n < 0) n = (n == -0xFFFFFFFFFFFFFFFF) ? 0xFFFFFFFFFFFFFFFF : -n;
     if (n > 9999999999999999999U) return 20;
     if (n > 999999999999999999) return 19;
     if (n > 99999999999999999) return 18;
@@ -153,7 +154,7 @@ static int count_digits (uint64_t n) {
 
 uint32_t print_hash_to_numchars(const binresult *res) {
   uint32_t i,j;
-  uint32_t ret = 4;
+  uint32_t ret = 5;
   if (unlikely(!res || res->type!=PARAM_HASH)) {
     debug(D_WARNING, "expecting hash as first parameter, got %lu", (long unsigned int ) res->type);
     return 0;
@@ -188,32 +189,34 @@ uint32_t print_hash_to_numchars(const binresult *res) {
         else if (res->hash[i].value->array[j]->type == PARAM_HASH)
           ret += print_hash_to_numchars(res->hash[i].value->array[j]); 
 
-        if (j != res->hash[i].value->length)
-          ret++;
+        if (j != (res->hash[i].value->length - 1))
+          ret+=2;
       }
     }
-    if (i != res->length)
-      ret++;
+    if (i != (res->length -1))
+      ret+=2;
   }
 
   return ret;
 }
 
-uint32_t print_hash_to_json(const binresult *res, char* buff);
+uint32_t print_hash_to_json(const binresult *res, char** buff);
 
 static char * binresult_to_json(const binresult *res) {
   uint32_t buffsize = print_hash_to_numchars(res);
   if (!buffsize)
     return NULL;
-  char * buff = (char *) pmobile_malloc(mlib_, buffsize);
-  uint32_t chars_print = print_hash_to_json(res, buff);
+  char * buff = (char *) pmobile_malloc(mlib_, buffsize + 1);
+  uint32_t chars_print = print_hash_to_json(res, &buff);
   if (chars_print != buffsize)
     debug(D_BUG, "Bug buffer size and printed size don't match  printed %lu buffer %lu", (long unsigned int) chars_print, (long unsigned int) buffsize);
   return buff;
 }
 
-uint32_t print_hash_to_json(const binresult *res, char* buff){
+uint32_t print_hash_to_json(const binresult *res, char** buff1){
   uint32_t i,j,ret = 0,tmp;
+  char * buff = *buff1;
+  
   ret = sprintf(buff,"{\n");
   buff = buff +ret;
   for (i=0; i<res->length; i++) {
@@ -236,7 +239,9 @@ uint32_t print_hash_to_json(const binresult *res, char* buff){
       tmp  = sprintf(buff, "\"%s\": ", res->hash[i].key);
       buff = buff + tmp;
       ret += tmp;
-      ret += print_hash_to_json(res->hash[i].value, buff);
+      tmp = print_hash_to_json(res->hash[i].value, &buff);
+      buff = buff + tmp;
+      ret += tmp;
     }
     else if (res->hash[i].value->type == PARAM_ARRAY) {
       tmp  = sprintf(buff, "\"%s\": [\n", res->hash[i].key);
@@ -258,25 +263,29 @@ uint32_t print_hash_to_json(const binresult *res, char* buff){
           buff = buff + tmp;
           ret += tmp;
         }
-        else if (res->hash[i].value->array[j]->type == PARAM_HASH)
-          ret += print_hash_to_json(res->hash[i].value->array[j], buff); 
+        else if (res->hash[i].value->array[j]->type == PARAM_HASH) {
+          tmp = print_hash_to_json(res->hash[i].value->array[j], &buff); 
+          buff = buff + tmp;
+          ret += tmp;
+        }
         
-        if ((j != res->hash[i].value->length) && ret++)
-          buff = buff + sprintf(buff, ",");
+        if ((j != (res->hash[i].value->length - 1)) && (ret+=2))
+          buff = buff + sprintf(buff, ",\n");
       }
       tmp  = sprintf(buff, "\n]");
       buff = buff + tmp;
       ret += tmp;
     }
-    if ((i != res->length) && ret++)
-      buff = buff + sprintf(buff, ",");
+    if ((i != (res->length - 1)) && (ret+=2))
+      buff = buff + sprintf(buff, ",\n");
    }
+   buff = buff + sprintf(buff,"\n}\n"); ret+=3;
    return ret;
 }
 
 int psdk_send_api_command(const char *command, char **result, int login, int numparam, const char * fmt, ...) 
 {
-  binparam *t;
+  binparam *paramarray;
   va_list ap;
   int j;
   long pint = 0;
@@ -285,42 +294,44 @@ int psdk_send_api_command(const char *command, char **result, int login, int num
 //  int fmtlen = strlen(fmt);
   const char * fmtind = fmt;
   binresult* res;
+  int paramcnt = numparam; 
 
   if (login) {
     pthread_mutex_lock(&auth_lock_);
     if (logged_in_) {
-      t = (binparam *) pmobile_malloc(mlib_, (numparam+1)*sizeof(binparam));
-      init_param_str(t, AUTH_NAME, auth_);
+      paramarray = (binparam *) pmobile_malloc(mlib_, (numparam+1)*sizeof(binparam));
+      init_param_str(paramarray+numparam, AUTH_NAME, auth_);
+      paramcnt++;
     }
     else { 
       pthread_mutex_unlock(&auth_lock_);
       return 19;
     }
     pthread_mutex_unlock(&auth_lock_);
-  } else t = (binparam *) pmobile_malloc(mlib_, (numparam)*sizeof(binparam));
+  } else paramarray = (binparam *) pmobile_malloc(mlib_, (numparam)*sizeof(binparam));
  
   va_start(ap, fmt); //Requires the last fixed parameter (to get the address)
     for(j=0; j<numparam; j++) {
       next = strchr(fmtind,'%');
       if (!next)
         break;
-      char * name = strndup(fmtind, (next - fmtind -1));
+      char * name = strndup(fmtind, (next - fmtind));
       if (next[1] == 's') {
         pstr = va_arg(ap, char *);
-        init_param_str(t, name,pstr);
-      } if (next[1] == 'b') {
+        init_param_str(paramarray+j, name,pstr);
+      }else if (next[1] == 'b') {
         pint = va_arg(ap, long);
-        init_param_bool(t, name,pint);
+        init_param_bool(paramarray+j, name,pint);
       } else {
         pint = va_arg(ap, long);
-        init_param_num(t, name,pint);
+        init_param_num(paramarray+j, name,pint);
       }
       fmtind = next+3;
     }
   va_end(ap);
   
-  res = pmobile_api_run_command(mlib_, command, t, apiserver);
-  pmobile_free(t);
+  res = pmobile_do_api_run_command(mlib_, command, strlen(command), paramarray,  paramcnt, apiserver);
+  pmobile_free(paramarray);
   
   *result = binresult_to_json(res);
   
@@ -340,7 +351,8 @@ static int read_auth_from_file() {
         pthread_mutex_lock(&auth_lock_);
         if (auth_) 
           pmobile_free (auth_);
-        if ((p = strrchr(auth_, '\n')))
+        auth_=NULL;
+        if ((p = strrchr(line, '\n')))
           *p= '\0';
         auth_ = pmobile_strndup(mlib_ ,line, 1000);
         logged_in_ = 1;
@@ -385,14 +397,13 @@ int psdk_init(int save_auth, char **err)
 static int write_auth_to_file(const char * auth) {
   FILE *file = fopen(filename_, "w");
   if (file != NULL) {
-    pthread_mutex_lock(&auth_lock_);
     if (auth_) 
       pmobile_free (auth_);
-    auth_ = pmobile_strndup(mlib_, auth, 1000);
+    auth_=NULL;
+    auth_ = pmobile_strdup(mlib_, auth);
     fprintf(file,"%s\n",auth);
     fprintf(file,(access_token_?"a\n":"n\n"));
     logged_in_ = 1;
-    pthread_mutex_unlock(&auth_lock_);
     
     fclose(file);
   }
@@ -400,22 +411,21 @@ static int write_auth_to_file(const char * auth) {
 }
 
 static void set_auth(const char * auth) {
-    pthread_mutex_lock(&auth_lock_);
     if (auth_) 
       pmobile_free (auth_);
+    auth_=NULL;
     auth_ = pmobile_strndup(mlib_, auth, 1000);
     logged_in_ = 1;
-    pthread_mutex_unlock(&auth_lock_);
 }
 
 int psdk_set_user_pass(const char * user, const char * pass, int save_auth, uint64_t ref)
 {
   binparam params[] = { P_STR("username", user), P_STR("password", pass), P_NUM("getauth", 1) , 
-    P_NUM("logout", 1), P_NUM("getregistrationinfo", 1)};
+    P_NUM("logout", 1), P_NUM("getregistrationinfo", 1), P_NUM("getapiserver", 1)};
   binresult *res;
   const binresult *cres;
  // debug(D_NOTICE,"Just a test.");
-
+getauth:
   res = pmobile_api_run_command(mlib_, "userinfo", params, apiserver);
   if (unlikely_log(!res))
     return PMOBILE_ERROR_NET_ERROR;
@@ -426,11 +436,13 @@ int psdk_set_user_pass(const char * user, const char * pass, int save_auth, uint
     const char * auth = pmobile_find_result_str(res, "auth");
     if (auth) {
       save_auth_ = save_auth;
+      pthread_mutex_lock(&auth_lock_);
       if (save_auth_)
         write_auth_to_file(auth);
       else 
         set_auth(auth);
       access_token_ = 0;
+      pthread_mutex_unlock(&auth_lock_);
       
      /* uint64_t prem = pmobile_find_result(res, "premium", PARAM_BOOL)->num;
       uint64_t bus = pmobile_find_result(res, "business", PARAM_BOOL)->num;
@@ -444,9 +456,13 @@ int psdk_set_user_pass(const char * user, const char * pass, int save_auth, uint
             set_auth(auth);
         }
       }*/
-      cres=pmobile_find_result(pmobile_find_result(res, "apiserver", PARAM_HASH), "binapi", PARAM_STR);
-      if (cres->length)
-        api_set_server(cres->array[0]->str);
+      cres=pmobile_find_result(pmobile_find_result(res, "apiserver", PARAM_HASH), "binapi", PARAM_ARRAY);
+      if (cres->length) {
+        if (strcmp(apiserver,cres->array[0]->str)) {
+          api_set_server(cres->array[0]->str);
+          goto getauth;
+        }
+      }
     } else ret = 18;
   }
   
@@ -537,6 +553,7 @@ void psdk_stop()
   logged_in_ = 0;
   if (auth_)
     pmobile_free(auth_);
+  auth_=NULL;
   pthread_mutex_unlock(&auth_lock_);
   //pmobile_destroy((pmobile_t)(lib_ptr_));
   pthread_mutex_destroy(&auth_lock_);
@@ -570,6 +587,13 @@ pmobile_fileid_t extract_fileid(binresult *res,const char* filename, uint64_t *h
 
 
 int psdk_create_folder(const char *path, char **err){
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
+  
   binparam params[]={P_STR(AUTH_NAME, auth_), P_STR("path", path), P_STR("timeformat", "timestamp")};
   binresult *res;
   int ret = 0;
@@ -578,7 +602,7 @@ int psdk_create_folder(const char *path, char **err){
   return process_api_int_result(ret);
 }
 
-static int check_write_permissions(){return 0;} //TODO implement
+static int check_write_permissions(pmobile_folderid_t folderid){return 0;} //TODO implement
 
 static pmobile_folderid_t create_index_folder(const char * path) {
   char *buff=NULL;
@@ -604,6 +628,13 @@ static pmobile_folderid_t create_index_folder(const char * path) {
 }
 
 int psdk_check_create_folder (const char * path) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
+  
   pmobile_folderid_t folderid=get_folderid_by_path(path, 1);
   
   if (folderid==PSYNC_INVALID_FOLDERID) {
@@ -617,8 +648,10 @@ int psdk_check_create_folder (const char * path) {
 pmobile_fileid_t get_fileid_by_path(const char * remotepath,const char * filename, uint64_t *hash)
 {
   pthread_mutex_lock(&auth_lock_);
-  if (!logged_in_)
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
     return 19;
+  }
   pthread_mutex_unlock(&auth_lock_);
   
   pmobile_fileid_t fileid =  PSYNC_INVALID_FOLDERID;
@@ -640,13 +673,12 @@ pmobile_fileid_t get_fileid_by_path(const char * remotepath,const char * filenam
 
 pmobile_folderid_t get_folderid_by_path(const char * path, int create)
 {
-  uint64_t folderid;
-
   pthread_mutex_lock(&auth_lock_);
   if (!logged_in_)
     return 19;
   pthread_mutex_unlock(&auth_lock_);
-
+  
+  uint64_t folderid;
   binparam params[] = { P_STR(AUTH_NAME, auth_), P_STR("path", path)};
   binresult *res;
   
@@ -674,6 +706,12 @@ pmobile_folderid_t get_folderid_by_path(const char * path, int create)
 }
 
 int psdk_delete_folder(const char *path,  char **err) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
   
   binparam params[]={P_STR(AUTH_NAME, auth_), P_STR("path", path), P_STR("timeformat", "timestamp")};
   binresult *res;
@@ -684,6 +722,12 @@ int psdk_delete_folder(const char *path,  char **err) {
 }
   
 int psdk_delete_file(const char *path, char **err) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
   
   binparam params[]={P_STR(AUTH_NAME, auth_), P_STR("path", path), P_STR("timeformat", "timestamp")};
   binresult *res;
@@ -694,6 +738,12 @@ int psdk_delete_file(const char *path, char **err) {
 }
   
 int psdk_rename_file(const char *path, const char *topath,  char **err) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
   
   binparam params[]={P_STR(AUTH_NAME, auth_), P_STR("path", path), P_STR("topath", topath), P_STR("timeformat", "timestamp")};
   binresult *res;
@@ -704,6 +754,12 @@ int psdk_rename_file(const char *path, const char *topath,  char **err) {
 }
 
 int psdk_rename_folder(const char *path, const char *topath,  char **err) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return 19;
+  }
+  pthread_mutex_unlock(&auth_lock_);
   
   binparam params[]={P_STR(AUTH_NAME, auth_), P_STR("path", path), P_STR("topath", topath), P_STR("timeformat", "timestamp")};
   binresult *res;
@@ -713,10 +769,17 @@ int psdk_rename_folder(const char *path, const char *topath,  char **err) {
   return process_api_int_result(ret);
 }
   
-const char *  psdk_list_folder(const char *path,  char **err) {
+char * psdk_list_folder(const char *path,  char **err) {
+  pthread_mutex_lock(&auth_lock_);
+  if (!logged_in_) {
+    pthread_mutex_unlock(&auth_lock_);
+    return NULL;
+  }
+  pthread_mutex_unlock(&auth_lock_);
+  
   char * result;
   
-  int ret = psdk_send_api_command("listfolder", &result, 1, 2, "auth%s path%s", auth_, path);
+  int ret = psdk_send_api_command("listfolder", &result, 1, 1, "path%s", path);
   if (ret == 0)
     return result;
   else {
@@ -725,50 +788,55 @@ const char *  psdk_list_folder(const char *path,  char **err) {
       return NULL;
     }
     else return NULL;
-  }
-  
+  }  
 }
 static const char *clientid_;
 static const char *requestid_;
 static const char *clientsicret_;
 
-static void wait_authorized() {
+ void psdk_wait_authorized() {
   logged_in_ = 0;
   pthread_mutex_lock(&auth_lock_);
   if (auth_)
     pmobile_free(auth_);
+  auth_= NULL;
   
-  binparam params[] = { P_STR("client_id", clientid_), P_STR("client_secret", clientsicret_),  P_STR("request_id ", requestid_)};
+  binparam params[] = { P_STR("client_id", clientid_), P_STR("client_secret", clientsicret_),  P_STR("request_id", requestid_)};
   binresult *res;
 
-  res = pmobile_api_run_command(mlib_, "oauth2_token ", params, apiserver);
+  res = pmobile_api_run_command(mlib_, "oauth2_token", params, apiserver);
   if (unlikely_log(!res))
     goto end_unlk;
+  char * result = binresult_to_json(res);
+  debug(D_NOTICE, "userinfo returned error %s", result);
+  pmobile_free(result);
   uint64_t ret = process_api_result(res);
-  if (!ret)
+  if (ret)
     debug(D_WARNING, "userinfo returned error %lu: %s", ret, pmobile_find_result_str(res, "error"));
   else {
-    const char * auth = pmobile_find_result_str(res, "access_token");
-    if (auth) {
-      write_auth_to_file(auth);
+    const char * auth1 = pmobile_find_result_str(res, "access_token");
+    if (auth1) {
+      write_auth_to_file(auth1);
       logged_in_ = 1;
       access_token_ = 1;
       save_auth_ = 1;
     }
+    debug(D_NOTICE, "Found access token %s", auth1);
   }
 end_unlk:
   pthread_mutex_unlock(&auth_lock_);
+  debug(D_NOTICE, "Login unlocked");
 }
 
 char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret) { 
-  int bufsize = 86 + strlen (clientid) + strlen (requestid);
+  int bufsize = 87 + strlen (clientid) + strlen (requestid);
   char * buff = (char *)malloc(bufsize);
   int ret = sprintf(buff, "https://my.pcloud.com/oauth2/authorize?client_id=%s&response_type=poll_token&request_id=%s", clientid, requestid);
   if (ret != bufsize)
     debug(D_WARNING, "Size missmatch %d %d",ret, bufsize);
   clientid_ = pmobile_strdup(mlib_, clientid);
   requestid_ = pmobile_strdup(mlib_, requestid);
-  requestid_ = pmobile_strdup(mlib_, clientsicret);
-  pmobile_run_thread0(mlib_, wait_authorized);
+  clientsicret_ = pmobile_strdup(mlib_, clientsicret);
+ // pmobile_run_thread0(mlib_, wait_authorized);
   return buff;
 }

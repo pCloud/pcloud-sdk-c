@@ -1,6 +1,6 @@
-#CC=clang
-CC=gcc
-CFLAGS       = -fPIC -g #-pedantic -Wall -Wextra -ggdb3
+CC=clang
+#CC=gcc
+#CFLAGS       = -fPIC -g #-pedantic -Wall -Wextra -ggdb3
 LDFLAGS      = -lz -ldl -lpmobile -Lpmobile -lmbedtls -lfuse -lpthread -Llibs/mbedtls/library
 SHAREFLAGS = -shared
 
@@ -10,7 +10,7 @@ RELEASEFLAGS = -O2 -D NDEBUG -combine -fwhole-program
 USESSL=mbedtls
 
 #CFLAGS=-Wall -Wpointer-arith -g -O2 -fsanitize=address
-CFLAGS=-Wall -Wpointer-arith -g -O2 -fPIC -I./pmobile 
+CFLAGS=-Wall -Wpointer-arith -g -fPIC -I./pmobile
 #CFLAGS=-Wall -Wpointer-arith -g -O2
 
 TARGET=pSDK.so
@@ -18,14 +18,18 @@ TARGET=pSDK.so
 STAT_LIBS= pmobile/libpmobile.a libs/mbedtls/library/libmbedtls.a
 
 OBJ=pSDK.o libs/sqlite/sqlite3.o
-all: $(TARGET)
 
-pmobile:
+all: $(TARGET) test 
+
+libs/mbedtls/library/libmbedtls.a:
+	cd libs/mbedtls && $(MAKE)
+
+pmobile/libpmobile.a: 
 	cd pmobile && $(MAKE)
 
 #$(TARGET): $(OBJ)
 #	$(LINK.c) -shared $< -o $@
-$(TARGET): $(OBJ) pmobile 
+$(TARGET): pmobile/libpmobile.a libs/mbedtls/library/libmbedtls.a $(OBJ) 
 	$(CC) $(SHAREFLAGS) $(CFLAGS) $(LDFLAGS) $(DEBUGFLAGS) -o $(TARGET) $(OBJ) $(STAT_LIBS)
 	
 test: test.o $(TARGET)
@@ -33,5 +37,5 @@ test: test.o $(TARGET)
 	
 
 clean:
-	rm -f *~ *.o $(TARGET) ./test
+	rm -f *~ *.o $(TARGET) ./test && cd libs/mbedtls && $(MAKE) clean && cd ../.. && cd pmobile && $(MAKE) clean
 

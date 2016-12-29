@@ -37,12 +37,16 @@ extern "C" {
   
   int psdk_rename_folder(const char *path, const char *topath,  char **err);
   
-  const char *  psdk_list_folder(const char *path,  char **err);
+  char * psdk_list_folder(const char *path,  char **err);
   
   int psdk_send_api_command(const char *command, char **result, int login, int numparam, const char * fmt, ...);
   
   void psdk_stop();
 
+  char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret);
+  
+  void psdk_wait_authorized() ;
+  
 #ifdef __cplusplus
 }
 #endif
