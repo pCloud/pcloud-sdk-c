@@ -1,3 +1,4 @@
 [submodule "pmobile"]
 	path = pmobile
-	url = https://gitlab.pcloud.com/pcloud/pmobile.git 
+	url = https://gitlab.pcloud.com/pcloud/pmobile.git
+        branch = SDK 
