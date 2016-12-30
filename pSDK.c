@@ -828,7 +828,7 @@ end_unlk:
   debug(D_NOTICE, "Login unlocked");
 }
 
-char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret) { 
+char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret, int wait) { 
   int bufsize = 87 + strlen (clientid) + strlen (requestid);
   char * buff = (char *)malloc(bufsize);
   int ret = sprintf(buff, "https://my.pcloud.com/oauth2/authorize?client_id=%s&response_type=poll_token&request_id=%s", clientid, requestid);
@@ -837,6 +837,7 @@ char * psdk_authorize(const char *clientid,const char *requestid, char * clients
   clientid_ = pmobile_strdup(mlib_, clientid);
   requestid_ = pmobile_strdup(mlib_, requestid);
   clientsicret_ = pmobile_strdup(mlib_, clientsicret);
- // pmobile_run_thread0(mlib_, wait_authorized);
+  if (wait)
+    pmobile_run_thread0(mlib_, psdk_wait_authorized);
   return buff;
 }
