@@ -816,10 +816,10 @@ static const char *clientsicret_;
   else {
     const char * auth1 = pmobile_find_result_str(res, "access_token");
     if (auth1) {
-      write_auth_to_file(auth1);
       logged_in_ = 1;
       access_token_ = 1;
       save_auth_ = 1;
+      write_auth_to_file(auth1);
     }
     debug(D_NOTICE, "Found access token %s", auth1);
   }
@@ -828,7 +828,8 @@ end_unlk:
   debug(D_NOTICE, "Login unlocked");
 }
 
-char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret, int wait) { 
+char * psdk_authorize(const char *clientid,const char *requestid, char * clientsicret, int wait) {
+  
   int bufsize = 87 + strlen (clientid) + strlen (requestid);
   char * buff = (char *)malloc(bufsize);
   int ret = sprintf(buff, "https://my.pcloud.com/oauth2/authorize?client_id=%s&response_type=poll_token&request_id=%s", clientid, requestid);

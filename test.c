@@ -8,7 +8,7 @@ int main()
   char *err = NULL;
   psdk_init(1, &err);
   
-  char * authurl = psdk_authorize("lCmd5dtXNYX","1031", "LKAqbD8y39L93Y3WtdbRHy2mLQ8y", 1);
+  char * authurl = psdk_authorize("xfxcvg","1034", "dxvxcvxcvzvxczvczxvdfsbdgfnghfmhgfm", 1);
   printf ("Paste this in browser [%s]\n", authurl );
   
   //psdk_wait_authorized();
